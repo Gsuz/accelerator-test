@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use shared::{BinanceBookTickerEvent, ExperimentResults, ForwardedEvent, LatencyMeasurement};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::net::UdpSocket;
+
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
