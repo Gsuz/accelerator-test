@@ -3,8 +3,7 @@ use futures_util::StreamExt;
 use shared::{BinanceBookTickerEvent, ExperimentResults, ForwardedEvent, LatencyMeasurement};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -224,19 +223,15 @@ async fn run_baseline_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>
 }
 
 async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting AWS backbone mode");
+    println!("Starting AWS backbone mode (UDP)");
     println!("Listening on port: {}", args.port);
 
-    // Bind TCP listener to configured port
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
-    println!("TCP listener bound to 0.0.0.0:{}", args.port);
+    // Bind UDP socket to configured port
+    let socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", args.port)).await?;
+    println!("UDP socket bound to 0.0.0.0:{}", args.port);
+    println!("Waiting for data from Tokyo forwarder...");
 
-    // Accept connection from Tokyo forwarder
-    println!("Waiting for connection from Tokyo forwarder...");
-    let (socket, addr) = listener.accept().await?;
-    println!("Accepted connection from: {}", addr);
-
-    let mut reader = BufReader::new(socket);
+    let mut buf = vec![0u8; 65536]; // Max UDP packet size
     let mut measurements = Vec::new();
     let mut received_sequence_ids = HashSet::new();
     let start_time = std::time::Instant::now();
@@ -252,8 +247,6 @@ async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
     println!("Time | Events/s | E2E Latency | Backbone | Min E2E | Max E2E");
     println!("-----|----------|-------------|----------|---------|--------");
 
-    let mut line = String::new();
-
     // Receive events with timeout
     loop {
         let elapsed = start_time.elapsed();
@@ -263,85 +256,86 @@ async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
         }
 
         let remaining = duration - elapsed;
-        line.clear();
 
-        match timeout(remaining, reader.read_line(&mut line)).await {
-            Ok(Ok(0)) => {
-                println!("Connection closed by Tokyo forwarder");
-                break;
-            }
-            Ok(Ok(_)) => {
+        match timeout(remaining, socket.recv_from(&mut buf)).await {
+            Ok(Ok((len, _addr))) => {
                 // Record Frankfurt arrival timestamp immediately
                 let frankfurt_receive_time =
                     SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
 
-                // Deserialize ForwardedEvent
-                if let Ok(event) = serde_json::from_str::<ForwardedEvent>(line.trim()) {
-                    // Track sequence ID
-                    received_sequence_ids.insert(event.sequence_id);
+                // Parse the received data
+                let data = &buf[..len];
+                if let Ok(data_str) = std::str::from_utf8(data) {
+                    // Deserialize ForwardedEvent
+                    if let Ok(event) = serde_json::from_str::<ForwardedEvent>(data_str) {
+                        // Track sequence ID
+                        received_sequence_ids.insert(event.sequence_id);
 
-                    // Calculate latencies
-                    let measurement = LatencyMeasurement::new_aws_backbone(
-                        event.sequence_id,
-                        event.binance_event_time,
-                        event.tokyo_receive_timestamp,
-                        frankfurt_receive_time,
-                    );
+                        // Calculate latencies
+                        let measurement = LatencyMeasurement::new_aws_backbone(
+                            event.sequence_id,
+                            event.binance_event_time,
+                            event.tokyo_receive_timestamp,
+                            frankfurt_receive_time,
+                        );
 
-                    // Track for per-second stats
-                    events_this_second += 1;
-                    e2e_latencies_this_second.push(measurement.end_to_end_latency_ms);
-                    if let Some(backbone) = measurement.backbone_latency_ms {
-                        backbone_latencies_this_second.push(backbone);
-                    }
-
-                    measurements.push(measurement);
-
-                    // Report stats every second
-                    if last_second_report.elapsed() >= Duration::from_secs(1) {
-                        if !e2e_latencies_this_second.is_empty() {
-                            let avg_e2e = e2e_latencies_this_second.iter().sum::<f64>()
-                                / e2e_latencies_this_second.len() as f64;
-                            let min_e2e = e2e_latencies_this_second
-                                .iter()
-                                .cloned()
-                                .fold(f64::INFINITY, f64::min);
-                            let max_e2e = e2e_latencies_this_second
-                                .iter()
-                                .cloned()
-                                .fold(f64::NEG_INFINITY, f64::max);
-
-                            let avg_backbone = if !backbone_latencies_this_second.is_empty() {
-                                backbone_latencies_this_second.iter().sum::<f64>()
-                                    / backbone_latencies_this_second.len() as f64
-                            } else {
-                                0.0
-                            };
-
-                            let elapsed_secs = start_time.elapsed().as_secs();
-                            println!(
-                                "{:>4}s | {:>8} | {:>9.2} ms | {:>6.2} ms | {:>7.0} | {:>7.0}",
-                                elapsed_secs,
-                                events_this_second,
-                                avg_e2e,
-                                avg_backbone,
-                                min_e2e,
-                                max_e2e
-                            );
+                        // Track for per-second stats
+                        events_this_second += 1;
+                        e2e_latencies_this_second.push(measurement.end_to_end_latency_ms);
+                        if let Some(backbone) = measurement.backbone_latency_ms {
+                            backbone_latencies_this_second.push(backbone);
                         }
 
-                        // Reset counters
-                        events_this_second = 0;
-                        e2e_latencies_this_second.clear();
-                        backbone_latencies_this_second.clear();
-                        last_second_report = std::time::Instant::now();
+                        measurements.push(measurement);
+
+                        // Report stats every second
+                        if last_second_report.elapsed() >= Duration::from_secs(1) {
+                            if !e2e_latencies_this_second.is_empty() {
+                                let avg_e2e = e2e_latencies_this_second.iter().sum::<f64>()
+                                    / e2e_latencies_this_second.len() as f64;
+                                let min_e2e = e2e_latencies_this_second
+                                    .iter()
+                                    .cloned()
+                                    .fold(f64::INFINITY, f64::min);
+                                let max_e2e = e2e_latencies_this_second
+                                    .iter()
+                                    .cloned()
+                                    .fold(f64::NEG_INFINITY, f64::max);
+
+                                let avg_backbone = if !backbone_latencies_this_second.is_empty() {
+                                    backbone_latencies_this_second.iter().sum::<f64>()
+                                        / backbone_latencies_this_second.len() as f64
+                                } else {
+                                    0.0
+                                };
+
+                                let elapsed_secs = start_time.elapsed().as_secs();
+                                println!(
+                                    "{:>4}s | {:>8} | {:>9.2} ms | {:>6.2} ms | {:>7.0} | {:>7.0}",
+                                    elapsed_secs,
+                                    events_this_second,
+                                    avg_e2e,
+                                    avg_backbone,
+                                    min_e2e,
+                                    max_e2e
+                                );
+                            }
+
+                            // Reset counters
+                            events_this_second = 0;
+                            e2e_latencies_this_second.clear();
+                            backbone_latencies_this_second.clear();
+                            last_second_report = std::time::Instant::now();
+                        }
+                    } else {
+                        eprintln!("Failed to parse ForwardedEvent");
                     }
                 } else {
-                    eprintln!("Failed to parse ForwardedEvent: {}", line.trim());
+                    eprintln!("Failed to parse UTF-8");
                 }
             }
             Ok(Err(e)) => {
-                eprintln!("TCP read error: {}", e);
+                eprintln!("UDP recv error: {}", e);
                 break;
             }
             Err(_) => {

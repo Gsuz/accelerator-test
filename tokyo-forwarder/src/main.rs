@@ -3,8 +3,7 @@ use shared::{BinanceBookTickerEvent, ForwardedEvent};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::UdpSocket;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -126,12 +125,10 @@ async fn run_forwarder(
     config: Config,
     sequence_counter: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to Frankfurt TCP endpoint
-    let mut tcp_stream = connect_to_frankfurt(&config).await?;
-    println!(
-        "Connected to Frankfurt at {}:{}",
-        config.frankfurt_ip, config.frankfurt_port
-    );
+    // Create UDP socket
+    let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let frankfurt_addr = format!("{}:{}", config.frankfurt_ip, config.frankfurt_port);
+    println!("UDP socket created, will send to {}", frankfurt_addr);
 
     // Connect to Binance WebSocket
     let mut ws_stream = connect_to_binance(&config).await?;
@@ -161,18 +158,13 @@ async fn run_forwarder(
                             event_data: text,
                         };
 
-                        // Serialize and send to Frankfurt
+                        // Serialize and send to Frankfurt via UDP
                         match serde_json::to_string(&forwarded_event) {
                             Ok(json) => {
-                                let message = format!("{}\n", json);
-                                if let Err(e) = tcp_stream.write_all(message.as_bytes()).await {
-                                    eprintln!(
-                                        "Failed to send to Frankfurt: {}. Reconnecting...",
-                                        e
-                                    );
-                                    tcp_stream = reconnect_to_frankfurt(&config).await?;
-                                    // Retry sending
-                                    tcp_stream.write_all(message.as_bytes()).await?;
+                                if let Err(e) =
+                                    udp_socket.send_to(json.as_bytes(), &frankfurt_addr).await
+                                {
+                                    eprintln!("Failed to send to Frankfurt: {}", e);
                                 }
                             }
                             Err(e) => {
@@ -230,38 +222,6 @@ async fn reconnect_to_binance(
         match connect_to_binance(config).await {
             Ok(stream) => {
                 println!("Successfully reconnected to Binance WebSocket");
-                return Ok(stream);
-            }
-            Err(e) => {
-                eprintln!("Reconnection failed: {}", e);
-                delay = std::cmp::min(delay * 2, config.reconnect_max_delay_secs);
-            }
-        }
-    }
-}
-
-async fn connect_to_frankfurt(config: &Config) -> Result<TcpStream, Box<dyn std::error::Error>> {
-    println!(
-        "Connecting to Frankfurt at {}:{}...",
-        config.frankfurt_ip, config.frankfurt_port
-    );
-    let addr = format!("{}:{}", config.frankfurt_ip, config.frankfurt_port);
-    let stream = TcpStream::connect(&addr).await?;
-    Ok(stream)
-}
-
-async fn reconnect_to_frankfurt(config: &Config) -> Result<TcpStream, Box<dyn std::error::Error>> {
-    let mut delay = 1;
-    loop {
-        println!(
-            "Attempting to reconnect to Frankfurt (delay: {}s)...",
-            delay
-        );
-        sleep(Duration::from_secs(delay)).await;
-
-        match connect_to_frankfurt(config).await {
-            Ok(stream) => {
-                println!("Successfully reconnected to Frankfurt");
                 return Ok(stream);
             }
             Err(e) => {
