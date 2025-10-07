@@ -1,0 +1,41 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# AWS resource files (contains instance IDs, IPs, etc.)
+vpc-resources.txt
+*.pem
+
+# SSH keys
+*.key
+.ssh/
+
+# Experiment results
+results-*.json
+results-*.csv
+*.log
+
+# Config files with private IPs (regenerated per deployment)
+config/*.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+.env
+.env.local
+
+# AWS credentials
+.aws/
+credentials
+
+# Kiro IDE (keep specs but ignore other IDE state)
+.kiro/settings/
+.kiro/cache/

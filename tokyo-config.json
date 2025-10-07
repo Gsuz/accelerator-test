@@ -1,0 +1,6 @@
+{
+    "binance_ws_url": "wss://stream.binance.com:9443/ws/btcusdt@bookTicker",
+    "frankfurt_private_ip": "10.1.1.10",
+    "frankfurt_port": 8080,
+    "reconnect_max_delay_secs": 30
+}

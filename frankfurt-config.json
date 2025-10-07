@@ -1,0 +1,7 @@
+{
+    "mode": "baseline",
+    "binance_ws_url": "wss://stream.binance.com:9443/ws/btcusdt@bookTicker",
+    "listen_port": 8080,
+    "duration_secs": 300,
+    "output_file": "results.json"
+}
