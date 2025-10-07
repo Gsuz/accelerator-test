@@ -17,7 +17,7 @@ struct Args {
     mode: String,
 
     /// Duration to collect data in seconds
-    #[arg(long, default_value = "300")]
+    #[arg(long, default_value = "60")]
     duration: u64,
 
     /// Output file path for results (JSON)
@@ -121,7 +121,18 @@ async fn run_baseline_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>
                         sequence_id += 1;
 
                         if sequence_id % 100 == 0 {
-                            println!("Collected {} measurements", sequence_id);
+                            // Calculate stats for last 100 measurements
+                            let recent: Vec<f64> = measurements
+                                .iter()
+                                .rev()
+                                .take(100)
+                                .map(|m| m.end_to_end_latency_ms)
+                                .collect();
+                            let avg = recent.iter().sum::<f64>() / recent.len() as f64;
+                            println!(
+                                "Collected {} measurements | Last 100 avg: {:.2} ms",
+                                sequence_id, avg
+                            );
                         }
                     }
                 }
@@ -239,7 +250,31 @@ async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
                     measurements.push(measurement);
 
                     if received_sequence_ids.len() % 100 == 0 {
-                        println!("Collected {} measurements", received_sequence_ids.len());
+                        // Calculate stats for last 100 measurements
+                        let recent_e2e: Vec<f64> = measurements
+                            .iter()
+                            .rev()
+                            .take(100)
+                            .map(|m| m.end_to_end_latency_ms)
+                            .collect();
+                        let recent_backbone: Vec<f64> = measurements
+                            .iter()
+                            .rev()
+                            .take(100)
+                            .filter_map(|m| m.backbone_latency_ms)
+                            .collect();
+
+                        let avg_e2e = recent_e2e.iter().sum::<f64>() / recent_e2e.len() as f64;
+                        let avg_backbone = if !recent_backbone.is_empty() {
+                            recent_backbone.iter().sum::<f64>() / recent_backbone.len() as f64
+                        } else {
+                            0.0
+                        };
+
+                        println!(
+                            "Collected {} measurements | Last 100 avg - E2E: {:.2} ms, Backbone: {:.2} ms",
+                            received_sequence_ids.len(), avg_e2e, avg_backbone
+                        );
                     }
                 } else {
                     eprintln!("Failed to parse ForwardedEvent: {}", line.trim());
