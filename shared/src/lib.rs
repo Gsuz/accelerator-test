@@ -3,16 +3,23 @@
 use serde::{Deserialize, Serialize};
 
 /// Binance book ticker event structure
-/// Matches the JSON format from Binance WebSocket stream
-/// Note: The bookTicker stream doesn't include event_time (E) or event_type (e) fields
-/// We'll use the system time when we receive the event instead
+/// Matches the JSON format from Binance WebSocket bookTicker stream
 #[derive(Debug, Clone, Deserialize)]
 pub struct BinanceBookTickerEvent {
+    #[serde(rename = "e")]
+    pub event_type: String, // Event type ("bookTicker")
+
     #[serde(rename = "u")]
     pub update_id: i64, // Order book updateId
 
+    #[serde(rename = "E")]
+    pub event_time: i64, // Event time (milliseconds)
+
+    #[serde(rename = "T")]
+    pub transaction_time: i64, // Transaction time (milliseconds)
+
     #[serde(rename = "s")]
-    pub symbol: String, // Trading pair symbol (BTCUSDT)
+    pub symbol: String, // Symbol (BTCUSDT)
 
     #[serde(rename = "b")]
     pub best_bid_price: String, // Best bid price

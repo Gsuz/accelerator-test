@@ -147,19 +147,17 @@ async fn run_forwarder(
                     .unwrap()
                     .as_nanos() as i64;
 
-                // Parse the Binance event to validate format
+                // Parse the Binance event to get timestamp
                 match serde_json::from_str::<BinanceBookTickerEvent>(&text) {
-                    Ok(_event) => {
+                    Ok(event) => {
                         // Assign sequence ID
                         let sequence_id = sequence_counter.fetch_add(1, Ordering::SeqCst);
 
-                        // Create forwarded event
-                        // Note: Binance bookTicker stream doesn't include event_time,
-                        // so we use tokyo_receive_timestamp as the binance_event_time
+                        // Create forwarded event with Binance's event time
                         let forwarded_event = ForwardedEvent {
                             sequence_id,
                             tokyo_receive_timestamp,
-                            binance_event_time: tokyo_receive_timestamp / 1_000_000, // Convert nanos to millis
+                            binance_event_time: event.event_time, // Use Binance's event time (milliseconds)
                             event_data: text,
                         };
 

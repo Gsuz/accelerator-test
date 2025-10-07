@@ -104,16 +104,13 @@ async fn run_baseline_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>
                     SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
 
                 if let Message::Text(text) = msg {
-                    // Parse JSON to validate format
-                    if let Ok(_event) = serde_json::from_str::<BinanceBookTickerEvent>(&text) {
-                        // Calculate latency
-                        // Note: Since bookTicker stream doesn't include timestamps,
-                        // we use frankfurt_receive_time as both the event time and receive time
-                        // This means baseline mode measures near-zero latency, but that's expected
-                        // since we're receiving directly from Binance
+                    // Parse JSON to get Binance event with timestamp
+                    if let Ok(event) = serde_json::from_str::<BinanceBookTickerEvent>(&text) {
+                        // Calculate latency using Binance's event time (E field)
+                        // event_time is in milliseconds, frankfurt_receive_time is in nanoseconds
                         let measurement = LatencyMeasurement::new_baseline(
                             sequence_id,
-                            frankfurt_receive_time / 1_000_000, // Convert nanos to millis for consistency
+                            event.event_time, // Binance event time in milliseconds
                             frankfurt_receive_time,
                         );
 
