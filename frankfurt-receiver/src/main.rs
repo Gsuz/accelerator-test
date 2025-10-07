@@ -31,7 +31,7 @@ struct Args {
     /// Binance WebSocket URL (baseline mode only)
     #[arg(
         long,
-        default_value = "wss://stream.binance.com:9443/ws/btcusdt@bookTicker"
+        default_value = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
     )]
     binance_url: String,
 
@@ -86,7 +86,14 @@ async fn run_baseline_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>
     let start_time = std::time::Instant::now();
     let duration = Duration::from_secs(args.duration);
 
+    // Per-second tracking
+    let mut last_second_report = std::time::Instant::now();
+    let mut events_this_second = 0u64;
+    let mut latencies_this_second = Vec::new();
+
     println!("Collecting data for {} seconds...", args.duration);
+    println!("Time | Events/s | Avg Latency | Min | Max");
+    println!("-----|----------|-------------|-----|-----");
 
     // Receive messages with timeout
     loop {
@@ -104,32 +111,61 @@ async fn run_baseline_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>
                     SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
 
                 if let Message::Text(text) = msg {
+                    // Debug: Print first message to see format
+                    if sequence_id == 0 {
+                        println!("First message received: {}", text);
+                    }
+
                     // Parse JSON to get Binance event with timestamp
-                    if let Ok(event) = serde_json::from_str::<BinanceBookTickerEvent>(&text) {
-                        // Calculate latency using Binance's event time (E field)
-                        // event_time is in milliseconds, frankfurt_receive_time is in nanoseconds
-                        let measurement = LatencyMeasurement::new_baseline(
-                            sequence_id,
-                            event.event_time, // Binance event time in milliseconds
-                            frankfurt_receive_time,
-                        );
-
-                        measurements.push(measurement);
-                        sequence_id += 1;
-
-                        if sequence_id % 100 == 0 {
-                            // Calculate stats for last 100 measurements
-                            let recent: Vec<f64> = measurements
-                                .iter()
-                                .rev()
-                                .take(100)
-                                .map(|m| m.end_to_end_latency_ms)
-                                .collect();
-                            let avg = recent.iter().sum::<f64>() / recent.len() as f64;
-                            println!(
-                                "Collected {} measurements | Last 100 avg: {:.2} ms",
-                                sequence_id, avg
+                    match serde_json::from_str::<BinanceBookTickerEvent>(&text) {
+                        Ok(event) => {
+                            // Calculate latency using Binance's event time (E field)
+                            // event_time is in milliseconds, frankfurt_receive_time is in nanoseconds
+                            let measurement = LatencyMeasurement::new_baseline(
+                                sequence_id,
+                                event.event_time, // Binance event time in milliseconds
+                                frankfurt_receive_time,
                             );
+
+                            // Track for per-second stats
+                            events_this_second += 1;
+                            latencies_this_second.push(measurement.end_to_end_latency_ms);
+
+                            measurements.push(measurement);
+                            sequence_id += 1;
+
+                            // Report stats every second
+                            if last_second_report.elapsed() >= Duration::from_secs(1) {
+                                if !latencies_this_second.is_empty() {
+                                    let avg = latencies_this_second.iter().sum::<f64>()
+                                        / latencies_this_second.len() as f64;
+                                    let min = latencies_this_second
+                                        .iter()
+                                        .cloned()
+                                        .fold(f64::INFINITY, f64::min);
+                                    let max = latencies_this_second
+                                        .iter()
+                                        .cloned()
+                                        .fold(f64::NEG_INFINITY, f64::max);
+
+                                    let elapsed_secs = start_time.elapsed().as_secs();
+                                    println!(
+                                        "{:>4}s | {:>8} | {:>9.2} ms | {:>3.0} | {:>3.0}",
+                                        elapsed_secs, events_this_second, avg, min, max
+                                    );
+                                }
+
+                                // Reset counters
+                                events_this_second = 0;
+                                latencies_this_second.clear();
+                                last_second_report = std::time::Instant::now();
+                            }
+                        }
+                        Err(e) => {
+                            if sequence_id < 5 {
+                                eprintln!("Failed to parse message: {}", e);
+                                eprintln!("Message was: {}", text);
+                            }
                         }
                     }
                 }
@@ -206,7 +242,15 @@ async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
     let start_time = std::time::Instant::now();
     let duration = Duration::from_secs(args.duration);
 
+    // Per-second tracking
+    let mut last_second_report = std::time::Instant::now();
+    let mut events_this_second = 0u64;
+    let mut e2e_latencies_this_second = Vec::new();
+    let mut backbone_latencies_this_second = Vec::new();
+
     println!("Collecting data for {} seconds...", args.duration);
+    println!("Time | Events/s | E2E Latency | Backbone | Min E2E | Max E2E");
+    println!("-----|----------|-------------|----------|---------|--------");
 
     let mut line = String::new();
 
@@ -244,34 +288,53 @@ async fn run_aws_backbone_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
                         frankfurt_receive_time,
                     );
 
+                    // Track for per-second stats
+                    events_this_second += 1;
+                    e2e_latencies_this_second.push(measurement.end_to_end_latency_ms);
+                    if let Some(backbone) = measurement.backbone_latency_ms {
+                        backbone_latencies_this_second.push(backbone);
+                    }
+
                     measurements.push(measurement);
 
-                    if received_sequence_ids.len() % 100 == 0 {
-                        // Calculate stats for last 100 measurements
-                        let recent_e2e: Vec<f64> = measurements
-                            .iter()
-                            .rev()
-                            .take(100)
-                            .map(|m| m.end_to_end_latency_ms)
-                            .collect();
-                        let recent_backbone: Vec<f64> = measurements
-                            .iter()
-                            .rev()
-                            .take(100)
-                            .filter_map(|m| m.backbone_latency_ms)
-                            .collect();
+                    // Report stats every second
+                    if last_second_report.elapsed() >= Duration::from_secs(1) {
+                        if !e2e_latencies_this_second.is_empty() {
+                            let avg_e2e = e2e_latencies_this_second.iter().sum::<f64>()
+                                / e2e_latencies_this_second.len() as f64;
+                            let min_e2e = e2e_latencies_this_second
+                                .iter()
+                                .cloned()
+                                .fold(f64::INFINITY, f64::min);
+                            let max_e2e = e2e_latencies_this_second
+                                .iter()
+                                .cloned()
+                                .fold(f64::NEG_INFINITY, f64::max);
 
-                        let avg_e2e = recent_e2e.iter().sum::<f64>() / recent_e2e.len() as f64;
-                        let avg_backbone = if !recent_backbone.is_empty() {
-                            recent_backbone.iter().sum::<f64>() / recent_backbone.len() as f64
-                        } else {
-                            0.0
-                        };
+                            let avg_backbone = if !backbone_latencies_this_second.is_empty() {
+                                backbone_latencies_this_second.iter().sum::<f64>()
+                                    / backbone_latencies_this_second.len() as f64
+                            } else {
+                                0.0
+                            };
 
-                        println!(
-                            "Collected {} measurements | Last 100 avg - E2E: {:.2} ms, Backbone: {:.2} ms",
-                            received_sequence_ids.len(), avg_e2e, avg_backbone
-                        );
+                            let elapsed_secs = start_time.elapsed().as_secs();
+                            println!(
+                                "{:>4}s | {:>8} | {:>9.2} ms | {:>6.2} ms | {:>7.0} | {:>7.0}",
+                                elapsed_secs,
+                                events_this_second,
+                                avg_e2e,
+                                avg_backbone,
+                                min_e2e,
+                                max_e2e
+                            );
+                        }
+
+                        // Reset counters
+                        events_this_second = 0;
+                        e2e_latencies_this_second.clear();
+                        backbone_latencies_this_second.clear();
+                        last_second_report = std::time::Instant::now();
                     }
                 } else {
                     eprintln!("Failed to parse ForwardedEvent: {}", line.trim());

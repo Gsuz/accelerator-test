@@ -1,0 +1,14 @@
+{
+  "setup_type": "baseline",
+  "sample_count": 0,
+  "events_lost": 0,
+  "avg_latency_ms": 0.0,
+  "median_latency_ms": 0.0,
+  "p95_latency_ms": 0.0,
+  "p99_latency_ms": 0.0,
+  "min_latency_ms": 0.0,
+  "max_latency_ms": 0.0,
+  "jitter_stddev_ms": 0.0,
+  "backbone_avg_latency_ms": null,
+  "backbone_median_latency_ms": null
+}

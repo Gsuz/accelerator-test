@@ -2,37 +2,43 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Binance book ticker event structure
-/// Matches the JSON format from Binance WebSocket bookTicker stream
+/// Binance aggregate trade event structure
+/// Matches the JSON format from Binance WebSocket aggTrade stream
 #[derive(Debug, Clone, Deserialize)]
-pub struct BinanceBookTickerEvent {
+pub struct BinanceAggTradeEvent {
     #[serde(rename = "e")]
-    pub event_type: String, // Event type ("bookTicker")
-
-    #[serde(rename = "u")]
-    pub update_id: i64, // Order book updateId
+    pub event_type: String, // Event type ("aggTrade")
 
     #[serde(rename = "E")]
     pub event_time: i64, // Event time (milliseconds)
 
-    #[serde(rename = "T")]
-    pub transaction_time: i64, // Transaction time (milliseconds)
-
     #[serde(rename = "s")]
     pub symbol: String, // Symbol (BTCUSDT)
 
-    #[serde(rename = "b")]
-    pub best_bid_price: String, // Best bid price
-
-    #[serde(rename = "B")]
-    pub best_bid_qty: String, // Best bid quantity
-
     #[serde(rename = "a")]
-    pub best_ask_price: String, // Best ask price
+    pub agg_trade_id: i64, // Aggregate trade ID
 
-    #[serde(rename = "A")]
-    pub best_ask_qty: String, // Best ask quantity
+    #[serde(rename = "p")]
+    pub price: String, // Price
+
+    #[serde(rename = "q")]
+    pub quantity: String, // Quantity
+
+    #[serde(rename = "f")]
+    pub first_trade_id: i64, // First trade ID
+
+    #[serde(rename = "l")]
+    pub last_trade_id: i64, // Last trade ID
+
+    #[serde(rename = "T")]
+    pub trade_time: i64, // Trade time (milliseconds)
+
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool, // Is the buyer the market maker?
 }
+
+// Keep the old name as an alias for compatibility
+pub type BinanceBookTickerEvent = BinanceAggTradeEvent;
 
 /// Event forwarded from Tokyo to Frankfurt
 /// Contains original Binance data plus Tokyo timestamps

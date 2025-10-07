@@ -23,7 +23,7 @@ impl Config {
 
         // Default configuration
         let mut config = Config {
-            binance_ws_url: "wss://stream.binance.com:9443/ws/btcusdt@bookTicker".to_string(),
+            binance_ws_url: "wss://stream.binance.com:9443/ws/btcusdt@aggTrade".to_string(),
             frankfurt_ip: "10.1.1.10".to_string(),
             frankfurt_port: 8080,
             reconnect_max_delay_secs: 30,
@@ -80,7 +80,7 @@ impl Config {
                     println!("Tokyo Forwarder - Binance WebSocket to Frankfurt forwarder");
                     println!("\nUsage: tokyo-forwarder [OPTIONS]");
                     println!("\nOptions:");
-                    println!("  --binance-url <URL>       Binance WebSocket URL (default: wss://stream.binance.com:9443/ws/btcusdt@bookTicker)");
+                    println!("  --binance-url <URL>       Binance WebSocket URL (default: wss://stream.binance.com:9443/ws/btcusdt@aggTrade)");
                     println!(
                         "  --frankfurt-ip <IP>       Frankfurt EC2 private IP (default: 10.1.1.10)"
                     );
